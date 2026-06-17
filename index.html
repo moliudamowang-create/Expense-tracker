@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AI 记账本</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#6366F1">
+  <!-- iOS Safari PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="记账本">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+
+  <!-- SheetJS for Excel export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --accent: #6366F1;
+      --accent-light: #EEF2FF;
+      --bg: #F8F9FA;
+      --card: #fff;
+      --text: #1A1A2E;
+      --muted: #6B7280;
+      --border: #E5E7EB;
+      --row-alt: #FAFAFA;
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bot: env(safe-area-inset-bottom, 0px);
+    }
+
+    body {
+      font-family: -apple-system, "PingFang SC", "SF Pro Display", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      padding-top: calc(var(--safe-top) + 16px);
+      padding-bottom: calc(var(--safe-bot) + 24px);
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+
+    /* ── header ── */
+    .header { margin-bottom: 20px; }
+    .header h1 { font-size: 24px; font-weight: 700; }
+    .header p  { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+    /* ── drop zone ── */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 16px;
+      padding: 28px 16px;
+      text-align: center;
+      cursor: pointer;
+      background: var(--card);
+      transition: border-color .2s, background .2s;
+      margin-bottom: 12px;
+      position: relative;
+    }
+    #drop-zone.drag-over { border-color: var(--accent); background: var(--accent-light); }
+    #drop-zone label {
+      display: block; cursor: pointer; width: 100%; height: 100%;
+    }
+    #drop-zone .icon  { font-size: 36px; margin-bottom: 8px; }
+    #drop-zone .hint  { font-weight: 600; font-size: 15px; color: var(--text); }
+    #drop-zone .sub   { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    #file-input       { display: none; }
+
+    /* loading overlay */
+    #loading {
+      display: none;
+      position: absolute; inset: 0;
+      background: rgba(255,255,255,.85);
+      border-radius: 14px;
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 10px;
+      font-weight: 600; color: var(--accent);
+      font-size: 15px;
+    }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid var(--accent-light);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── note input ── */
+    #note-input {
+      width: 100%; padding: 10px 14px;
+      border-radius: 12px; border: 1px solid var(--border);
+      font-size: 14px; outline: none; background: var(--card);
+      color: var(--text); margin-bottom: 18px;
+      -webkit-appearance: none;
+    }
+
+    /* ── stats ── */
+    #stats-bar {
+      display: none;
+      gap: 10px; margin-bottom: 18px; flex-wrap: wrap;
+    }
+    .stat-card {
+      background: var(--card); border-radius: 14px;
+      padding: 12px 16px; flex: 1; min-width: 100px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.07);
+    }
+    .stat-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+    .stat-value { font-size: 20px; font-weight: 700; margin-top: 2px; }
+
+    /* ── table wrapper ── */
+    #table-wrap {
+      display: none;
+      background: var(--card); border-radius: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.07);
+      overflow: hidden; margin-bottom: 14px;
+    }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead tr { background: #F9FAFB; border-bottom: 1px solid #F3F4F6; }
+    th { padding: 10px 10px; text-align: left; color: var(--muted); font-weight: 600; white-space: nowrap; }
+    td { padding: 9px 10px; border-bottom: 1px solid #F9FAFB; vertical-align: middle; }
+    .row-even { background: var(--card); }
+    .row-odd  { background: var(--row-alt); }
+    .amount   { font-weight: 700; color: var(--text); }
+    .muted    { color: var(--muted); }
+    .note-cell { max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tag {
+      display: inline-block; border-radius: 6px;
+      padding: 2px 7px; font-size: 11px; font-weight: 600;
+    }
+    .pm-chip {
+      display: inline-block; background: #F3F4F6;
+      border-radius: 6px; padding: 2px 7px; font-size: 11px;
+    }
+    .dash { color: #D1D5DB; }
+    .actions { white-space: nowrap; }
+    .actions button {
+      background: none; border: none; cursor: pointer;
+      font-size: 15px; padding: 0 3px; line-height: 1;
+    }
+    .cell-input {
+      padding: 3px 6px; border: 1px solid var(--border);
+      border-radius: 6px; font-size: 12px; max-width: 100%;
+      -webkit-appearance: none;
+    }
+    select.cell-input { padding: 3px 4px; }
+    .btn-save, .btn-cancel {
+      font-size: 12px !important; padding: 3px 7px !important;
+      border-radius: 6px !important; border: none !important;
+      cursor: pointer;
+    }
+    .btn-save   { background: var(--accent) !important; color: #fff !important; margin-right: 3px; }
+    .btn-cancel { background: #F3F4F6 !important; color: var(--text) !important; }
+
+    /* ── download bar ── */
+    #dl-bar {
+      display: none;
+      gap: 10px; flex-wrap: wrap;
+    }
+    .btn-dl {
+      flex: 1; min-width: 130px;
+      padding: 13px 16px; border-radius: 14px; border: none;
+      font-size: 14px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-outline { background: var(--card); color: var(--text); border: 1px solid var(--border) !important; font-weight: 600; }
+    .btn-danger  { background: #FEF2F2; color: #EF4444; min-width: unset; flex: 0; padding: 13px 14px; }
+
+    /* ── empty state ── */
+    #empty {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 48px 20px; color: var(--muted); gap: 10px;
+    }
+    #empty .big { font-size: 52px; }
+    #empty p    { font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>💳 AI 记账本</h1>
+    <p>上传截图，自动识别账单，导出 Excel</p>
+  </div>
+
+  <!-- Upload -->
+  <div id="drop-zone">
+    <label for="file-input">
+      <div class="icon">📷</div>
+      <div class="hint">点击上传截图</div>
+      <div class="sub">支持支付宝、微信、银行账单截图等</div>
+    </label>
+    <input type="file" id="file-input" accept="image/*" capture="environment">
+    <div id="loading">
+      <div class="spinner"></div>
+      AI 识别中...
+    </div>
+  </div>
+
+  <!-- Note -->
+  <input type="text" id="note-input" placeholder="备注用途（可选）：如「周末聚餐」「出差报销」…">
+
+  <!-- Stats -->
+  <div id="stats-bar">
+    <div class="stat-card">
+      <div class="stat-label">总支出</div>
+      <div class="stat-value" id="stat-total">0.00</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">记录笔数</div>
+      <div class="stat-value" id="stat-count">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">最多消费</div>
+      <div class="stat-value" id="stat-top" style="font-size:14px;margin-top:4px">—</div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div id="table-wrap">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>日期</th><th>金额</th><th>货币</th><th>商家</th>
+            <th>类别</th><th>支付方式</th><th>备注</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Empty -->
+  <div id="empty">
+    <div class="big">🧾</div>
+    <p>上传第一张账单截图开始记账</p>
+  </div>
+
+  <!-- Download -->
+  <div id="dl-bar">
+    <button class="btn-dl btn-primary" id="btn-xlsx">📊 下载 Excel</button>
+    <button class="btn-dl btn-outline" id="btn-csv">📄 下载 CSV</button>
+    <button class="btn-dl btn-danger"  id="btn-clear">🗑️</button>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
